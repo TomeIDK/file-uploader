@@ -6,13 +6,15 @@
 #include <pthread.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <sys/socket.h>
 
 #define PORT 8080
 #define BACKLOG 5 // Max pending connections
 #define STRING_LENGTH 11
 #define UPLOAD_DIR "uploads/"
 
-void generate_random_string(char *str, size_t length){
+void generate_random_string(char *str, size_t length)
+{
     const char charset[] = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
     size_t charset_size = sizeof(charset) - 1;
 
@@ -23,11 +25,12 @@ void generate_random_string(char *str, size_t length){
     }
 
     str[length] = '\0';
-    
 }
 
-void append_png(char *str) {
-    strcat(str, ".png");
+void append_png(char *str, char ext[32])
+{
+    strcat(str, ".");
+    strcat(str, ext);
 }
 
 void *handle_client(void *arg)
@@ -37,18 +40,43 @@ void *handle_client(void *arg)
     char filepath[STRING_LENGTH + 1 + 4 + sizeof(UPLOAD_DIR)];
 
     generate_random_string(filename, STRING_LENGTH);
-    append_png(filename);
+
+    char file_extension[32];
+    ssize_t file_extension_len = recv(client_fd, file_extension, sizeof(file_extension) - 1, 0);
+    if (file_extension_len <= 0) {
+        perror("Failed to receive file extension");
+        close(client_fd);
+        pthread_exit(NULL);
+    }
+    file_extension[strlen(file_extension) + 1] = '\0';
+    printf("Received file extension %s\n", file_extension);
+
+    append_png(filename, file_extension);
 
     snprintf(filepath, sizeof(filepath), "%s%s", UPLOAD_DIR, filename);
 
     struct stat st;
-    if (stat(UPLOAD_DIR, &st) == - 1)
-        mkdir(UPLOAD_DIR, 0700);
+    if (stat(UPLOAD_DIR, &st) == -1)
+        if (mkdir(UPLOAD_DIR, 0700))
+        {
+            perror("Failed to create uploads directory");
+            close(client_fd);
+            pthread_exit(NULL);
+        }
 
     FILE *fp = fopen(filepath, "wb");
     if (fp == NULL)
     {
         printf("Failed to create file '%s'", filename);
+        close(client_fd);
+        pthread_exit(NULL);
+    }
+
+    const char *ack = "Ready to receive file data";
+    ssize_t sent_bytes = send(client_fd, ack, strlen(ack), 0);
+    if (sent_bytes < 0) {
+        perror("Response write failed");
+        fclose(fp);
         close(client_fd);
         pthread_exit(NULL);
     }
@@ -71,16 +99,6 @@ void *handle_client(void *arg)
 
     fflush(fp);
     fclose(fp);
-
-    // const char *response = "File uploaded successfully";
-    // ssize_t sent_bytes = send(client_fd, response, strlen(response), 0);
-    // if (sent_bytes < 0) 
-    //     perror("Response write failed");
-    // else
-    //     printf("Response sent to client: %s\n", response);
-    
-    puts("File uploaded successfully!\n");
-
     close(client_fd);
     pthread_exit(NULL);
 }
@@ -139,6 +157,16 @@ int main()
             perror("Thread creation failed");
             close(client_fd);
         }
+
+        // Return server response if successful
+        const char *response = "File uploaded successfully";
+        ssize_t sent_bytes = send(client_fd, response, strlen(response), 0);
+        if (sent_bytes < 0)
+            perror("Response write failed");
+        else
+            printf("Response sent to client: %s\n", response);
+
+        puts("File uploaded successfully!\n");
         pthread_detach(tid);
     }
 
