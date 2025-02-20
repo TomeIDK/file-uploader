@@ -49,7 +49,7 @@ void *handle_client(void *arg)
         pthread_exit(NULL);
     }
     file_extension[strlen(file_extension) + 1] = '\0';
-    printf("Received file extension %s\n", file_extension);
+    printf("Received '.%s' file.\n", file_extension);
 
     append_png(filename, file_extension);
 

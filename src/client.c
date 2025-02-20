@@ -4,6 +4,7 @@
 #include <string.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 
 #define SERVER_IP "127.0.0.1"
 #define SERVER_PORT 8080
@@ -60,6 +61,7 @@ int main(int argc, char const *argv[])
 
     send(sockfd, extension_to_send, strlen(extension_to_send) + 1, 0);
 
+    // Acknowledge server has received file extension
     char ack[1024];
     int ack_len = recv(sockfd, ack, sizeof(ack), 0);
     if (ack_len <= 0) {
@@ -76,6 +78,15 @@ int main(int argc, char const *argv[])
     {
         printf("Failed to open file '%s'\n", image_filename);
         close(sockfd);
+        exit(1);
+    }
+
+    // Get file stats
+    struct stat *fp_stat;
+    int pstat = fstat(fp, fp_stat);
+    if (pstat != 0) {
+        perror("Error getting file stats");
+        fclose(fp);
         exit(1);
     }
 
