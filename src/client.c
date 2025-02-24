@@ -106,15 +106,6 @@ int main(int argc, char const *argv[])
         exit(1);
     }
 
-    // Get file stats
-    struct stat *fp_stat;
-    int pstat = fstat(fp, fp_stat);
-    if (pstat != 0) {
-        perror("Error getting file stats");
-        fclose(fp);
-        exit(1);
-    }
-
     // Send file data in chunks
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), fp)) > 0)
     {
