@@ -8,6 +8,7 @@
 
 #define SERVER_IP "127.0.0.1"
 #define SERVER_PORT 8080
+#define BUFFER_SIZE 12
 
 int main(int argc, char const *argv[])
 {
@@ -28,25 +29,6 @@ int main(int argc, char const *argv[])
     {
         target_dir = argv[2];
     }
-    char *filename_copy = strdup(image_filename);
-    if (filename_copy == NULL)
-    {
-        perror("Memory allocation failed");
-        exit(1);
-    }
-
-    char *file_extension = strrchr(filename_copy, '.');
-    if (file_extension != NULL)
-    {
-        file_extension++;
-    }
-    else
-    {
-        file_extension = "";
-    }
-
-    char extension_to_send[32];
-    snprintf(extension_to_send, sizeof(extension_to_send), "%s", file_extension);
 
     // Create socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -69,22 +51,6 @@ int main(int argc, char const *argv[])
         exit(1);
     }
 
-    send(sockfd, extension_to_send, strlen(extension_to_send), 0);
-
-    // Acknowledge server has received file extension
-    char ack[1024];
-    int ack_len = recv(sockfd, ack, sizeof(ack), 0);
-    if (ack_len <= 0)
-    {
-        printf("Failed to receive acknowledgment from server.\n");
-        close(sockfd);
-        exit(1);
-    }
-
-    printf("Server acknowledged 1: %s\n", ack);
-
-    // if (target_dir != NULL)
-    // {
     send(sockfd, target_dir, strlen(target_dir), 0);
     char ack_target_dir[1024];
     int ack_target_dir_len = recv(sockfd, ack_target_dir, sizeof(ack_target_dir), 0);
@@ -95,9 +61,7 @@ int main(int argc, char const *argv[])
         exit(1);
     }
     printf("Server acknowledged 2: %s\n", ack_target_dir);
-    // }
 
-    // Open file to upload
     fp = fopen(image_filename, "rb");
     if (fp == NULL)
     {
@@ -106,11 +70,49 @@ int main(int argc, char const *argv[])
         exit(1);
     }
 
+    // Send magic numbers to determine file type
+    unsigned char mn_buffer[BUFFER_SIZE];
+    size_t mn_bytes_read = fread(mn_buffer, 1, sizeof(mn_buffer), fp);
+
+    if (mn_bytes_read > 0)
+    {
+        ssize_t bytes_sent = send(sockfd, mn_buffer, mn_bytes_read, 0);
+        if (bytes_sent == -1)
+        {
+            perror("Failed to send magic numbers");
+            fclose(fp);
+            exit(1);
+        }
+        puts("Magic numbers sent successfully!\n");
+    }
+    else
+    {
+        puts("Failed to read magic numbers from the file\n");
+        fclose(fp);
+        exit(1);
+    }
+
+    fseek(fp, 0, SEEK_END);
+
+    // fp = fopen(image_filename, "rb");
+    // if (fp == NULL)
+    // {
+    //     printf("Failed to open file '%s'\n", image_filename);
+    //     close(sockfd);
+    //     exit(1);
+    // }
+
+    // fseek(fp, 0, SEEK_END);
+    // printf("file size %ld\n", ftell(fp));
+    // fseek(fp, 0, SEEK_SET);
+
     // Send file data in chunks
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), fp)) > 0)
     {
+        printf("bytes_read: %zd\n", bytes_read);
         ssize_t sent_bytes = send(sockfd, buffer, bytes_read, 0);
         printf("sent_bytes: %zd\n", sent_bytes);
+
         if (sent_bytes == -1)
         {
             perror("Send failed");

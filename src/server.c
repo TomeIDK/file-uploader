@@ -11,8 +11,15 @@
 
 #define PORT 8080
 #define BACKLOG 5 // Max pending connections
-#define STRING_LENGTH 32
+#define STRING_LENGTH 16
 #define FILE_BUFFER 1024
+
+// Magic numbers
+#define JPEG_MN {0xFF, 0xD8, 0xFF}
+#define PNG_MN {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
+
+#define JPEG_MAGIC_LEN 3
+#define PNG_MAGIC_LEN 8
 
 void generate_random_string(char *str, size_t length)
 {
@@ -127,6 +134,52 @@ ssize_t transfer_file(int socket_fd, int buffer_len, FILE *fp)
     return total_bytes;
 }
 
+char *determine_extension(int socket_fd)
+{
+    unsigned char jpeg_magic[] = JPEG_MN;
+    unsigned char png_magic[] = PNG_MN;
+
+    size_t jpeg_index = 0;
+    size_t png_index = 0;
+
+    unsigned char buffer;
+
+    size_t max_bytes = 32;
+
+    while (max_bytes--) {
+        ssize_t bytes_read = read(socket_fd, &buffer, 1);
+
+        if (bytes_read == 0) {
+            return "INVALID";
+        }
+
+        if (bytes_read == -1) {
+            return "INVALID";
+        }
+
+        if (jpeg_index < JPEG_MAGIC_LEN && buffer == jpeg_magic[jpeg_index]) {
+            jpeg_index++;
+            if (jpeg_index == JPEG_MAGIC_LEN) {
+                puts("Detected JPG file\n");
+                return "jpg";
+            }
+        } else if (jpeg_index > 0) {
+            jpeg_index = 0;
+        }
+
+        if (png_index < PNG_MAGIC_LEN && buffer ==  png_magic[png_index]) {
+            png_index++;
+            if (png_index == PNG_MAGIC_LEN) {
+                puts("Detected PNG file\n");
+                return "png";
+            }
+        } else if (png_index > 0) {
+            png_index = 0;
+        }
+    }
+    return "INVALID";
+}
+
 void *handle_client(void *arg)
 {
     int client_fd = *(int *)arg;
@@ -134,14 +187,6 @@ void *handle_client(void *arg)
     char upload_dir[256] = "./uploads/";
 
     generate_random_string(filename, STRING_LENGTH);
-
-    // Get file extension => Transform so it's based on file's magic number
-    char file_extension[8];
-    read_data(client_fd, file_extension, sizeof(file_extension));
-
-    // Acknowledge file extension was received
-    char ack_file_extension[] = "File extension received successfully\n";
-    acknowledge(client_fd, ack_file_extension);
 
     // Get target directory
     char target_dir[32];
@@ -151,6 +196,11 @@ void *handle_client(void *arg)
     // Acknowledge target directory was received
     char ack_target_dir[] = "Target directory received successfully\n";
     acknowledge(client_fd, ack_target_dir);
+
+    // Get file extension => Transform so it's based on file's magic number
+    char *file_extension = determine_extension(client_fd);
+    if (strcmp(file_extension, "INVALID") == 0)
+        pthread_exit(NULL);
 
     // Append extension to filename
     append_ext(filename, file_extension);
@@ -190,7 +240,6 @@ void *handle_client(void *arg)
         perror("Error writing file");
         fclose(fp);
     }
-    printf("total_bytes: %zd\n", total_bytes);
 
     fflush(fp);
     fclose(fp);
