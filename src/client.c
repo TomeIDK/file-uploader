@@ -10,8 +10,9 @@
 
 int main(int argc, char const *argv[])
 {
-    if (argc != 2) {
-        printf("Usage: %s <image_file>\n", argv[0]);
+    if (argc < 2)
+    {
+        printf("Usage: %s <image_file> [directory]\n", argv[0]);
         exit(1);
     }
 
@@ -21,16 +22,25 @@ int main(int argc, char const *argv[])
     char buffer[1024];
     ssize_t bytes_read;
     const char *image_filename = argv[1];
+    const char *target_dir = NULL;
+    if (argc > 2)
+    {
+        target_dir = argv[2];
+    }
     char *filename_copy = strdup(image_filename);
-    if (filename_copy == NULL) {
+    if (filename_copy == NULL)
+    {
         perror("Memory allocation failed");
         exit(1);
     }
 
     char *file_extension = strrchr(filename_copy, '.');
-    if (file_extension != NULL) {
+    if (file_extension != NULL)
+    {
         file_extension++;
-    } else {
+    }
+    else
+    {
         file_extension = "";
     }
 
@@ -58,17 +68,32 @@ int main(int argc, char const *argv[])
         exit(1);
     }
 
-    send(sockfd, extension_to_send, strlen(extension_to_send) + 1, 0);
+    send(sockfd, extension_to_send, strlen(extension_to_send), 0);
 
     char ack[1024];
     int ack_len = recv(sockfd, ack, sizeof(ack), 0);
-    if (ack_len <= 0) {
+    if (ack_len <= 0)
+    {
         printf("Failed to receive acknowledgment from server.\n");
         close(sockfd);
         exit(1);
     }
 
-    printf("Server acknowledged: %s\n", ack);
+    printf("Server acknowledged 1: %s\n", ack);
+
+    // if (target_dir != NULL)
+    // {
+    send(sockfd, target_dir, strlen(target_dir), 0);
+    char ack_target_dir[1024];
+    int ack_target_dir_len = recv(sockfd, ack_target_dir, sizeof(ack_target_dir), 0);
+    if (ack_target_dir_len <= 0)
+    {
+        printf("Failed to receive acknowledgment from server.\n");
+        close(sockfd);
+        exit(1);
+    }
+    printf("Server acknowledged 2: %s\n", ack_target_dir);
+    // }
 
     // Open file to upload
     fp = fopen(image_filename, "rb");
@@ -83,6 +108,7 @@ int main(int argc, char const *argv[])
     while ((bytes_read = fread(buffer, 1, sizeof(buffer), fp)) > 0)
     {
         ssize_t sent_bytes = send(sockfd, buffer, bytes_read, 0);
+        printf("sent_bytes: %zd\n", sent_bytes);
         if (sent_bytes == -1)
         {
             perror("Send failed");
@@ -98,16 +124,6 @@ int main(int argc, char const *argv[])
     }
     fclose(fp);
     printf("File sent successfully!\n");
-
-    // Receive server response
-    char response_buffer[1024];
-    int len = recv(sockfd, response_buffer, sizeof(response_buffer), 0);
-    if (len > 0)
-    {
-        response_buffer[len] = '\0';
-        printf("Server response: %s\n", response_buffer);
-    } else
-        printf("Failed to receive server response\n");
 
     close(sockfd);
     puts("Closed socket connection");

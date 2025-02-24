@@ -7,11 +7,12 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <errno.h>
 
 #define PORT 8080
 #define BACKLOG 5 // Max pending connections
-#define STRING_LENGTH 11
-#define UPLOAD_DIR "uploads/"
+#define STRING_LENGTH 32
+#define FILE_BUFFER 1024
 
 void generate_random_string(char *str, size_t length)
 {
@@ -27,80 +28,179 @@ void generate_random_string(char *str, size_t length)
     str[length] = '\0';
 }
 
-void append_png(char *str, char ext[32])
+void append_ext(char *str, char *ext)
 {
     strcat(str, ".");
     strcat(str, ext);
 }
 
-void *handle_client(void *arg)
+void create_directory(const char *path)
 {
-    int client_fd = *(int *)arg;
-    char filename[STRING_LENGTH + 1 + 4];
-    char filepath[STRING_LENGTH + 1 + 4 + sizeof(UPLOAD_DIR)];
+    char temp[256];
+    char *p = NULL;
+    size_t len;
 
-    generate_random_string(filename, STRING_LENGTH);
+    snprintf(temp, sizeof(temp), "%s", path);
+    len = strlen(temp);
+    if (temp[len - 1] == '/')
+        temp[len - 1] = '\0';
 
-    char file_extension[32];
-    ssize_t file_extension_len = recv(client_fd, file_extension, sizeof(file_extension) - 1, 0);
-    if (file_extension_len <= 0) {
-        perror("Failed to receive file extension");
-        close(client_fd);
-        pthread_exit(NULL);
-    }
-    file_extension[strlen(file_extension) + 1] = '\0';
-    printf("Received file extension %s\n", file_extension);
-
-    append_png(filename, file_extension);
-
-    snprintf(filepath, sizeof(filepath), "%s%s", UPLOAD_DIR, filename);
-
-    struct stat st;
-    if (stat(UPLOAD_DIR, &st) == -1)
-        if (mkdir(UPLOAD_DIR, 0700))
+    for (p = temp + 1; *p; p++)
+    {
+        if (*p == '/')
         {
-            perror("Failed to create uploads directory");
-            close(client_fd);
-            pthread_exit(NULL);
+            *p = '\0';
+            if (mkdir(temp, 0700) && errno != EEXIST)
+            {
+                perror("mkdir failed");
+            }
+            *p = '/';
         }
-
-    FILE *fp = fopen(filepath, "wb");
-    if (fp == NULL)
+    }
+    if (mkdir(temp, 0700) && errno != EEXIST)
     {
-        printf("Failed to create file '%s'", filename);
-        close(client_fd);
+        perror("mkdir failed");
+    }
+}
+
+// Read metadata from socket_fd
+void read_data(int socket_fd, char *metadata, size_t metadata_size)
+{
+
+    ssize_t metadata_len = recv(socket_fd, metadata, metadata_size - 1, 0);
+    if (metadata_len <= 0)
+    {
+        if (metadata_len == 0)
+            printf("Client closed the connection. \n");
+        else
+            perror("Failed to receive data");
+        close(socket_fd);
         pthread_exit(NULL);
     }
+    metadata[metadata_len] = '\0';
+    printf("Received data: '%s'\n", metadata);
+}
 
-    const char *ack = "Ready to receive file data";
-    ssize_t sent_bytes = send(client_fd, ack, strlen(ack), 0);
-    if (sent_bytes < 0) {
-        perror("Response write failed");
-        fclose(fp);
-        close(client_fd);
-        pthread_exit(NULL);
+// Acknowledge incoming data was received to client
+ssize_t acknowledge(int socket_fd, char *msg)
+{
+    ssize_t bytes_sent = send(socket_fd, (const void *)msg, strlen(msg) + 1, 0);
+    if (bytes_sent < 0)
+    {
+        perror("Failed to send acknowledgment");
+        return -1;
     }
+    return bytes_sent;
+}
 
-    char buffer[1024];
+// Read incoming file data and write to *fp filepath
+ssize_t transfer_file(int socket_fd, int buffer_len, FILE *fp)
+{
+    char *buffer = malloc(buffer_len);
+    if (!buffer)
+    {
+        perror("Memory allocation failed");
+        return -1;
+    }
     ssize_t bytes_read;
+    ssize_t total_bytes = 0;
 
-    while ((bytes_read = read(client_fd, buffer, sizeof(buffer))) > 0)
+    while ((bytes_read = read(socket_fd, buffer, buffer_len)) > 0)
     {
-        fwrite(buffer, 1, bytes_read, fp);
+        if (fwrite(buffer, 1, bytes_read, fp) != bytes_read)
+        {
+            perror("Write error");
+            free(buffer);
+            return -1;
+        }
+        total_bytes += bytes_read;
     }
-
     if (bytes_read < 0)
     {
         perror("Read error");
+        free(buffer);
         fclose(fp);
+        pthread_exit(NULL);
+    }
+
+    free(buffer);
+    return total_bytes;
+}
+
+void *handle_client(void *arg)
+{
+    int client_fd = *(int *)arg;
+    char filename[STRING_LENGTH + 8];
+    char upload_dir[256] = "./uploads/";
+
+    generate_random_string(filename, STRING_LENGTH);
+
+    // Get file extension => Transform so it's based on file's magic number
+    char file_extension[8];
+    read_data(client_fd, file_extension, sizeof(file_extension));
+
+    // Acknowledge file extension was received
+    char ack_file_extension[] = "File extension received successfully\n";
+    acknowledge(client_fd, ack_file_extension);
+
+    // Get target directory
+    char target_dir[32];
+    read_data(client_fd, target_dir, sizeof(target_dir));
+    target_dir[strlen(target_dir)] = '/';
+
+    // Acknowledge target directory was received
+    char ack_target_dir[] = "Target directory received successfully\n";
+    acknowledge(client_fd, ack_target_dir);
+
+    // Append extension to filename
+    append_ext(filename, file_extension);
+
+    // Set up upload path
+    char full_upload_dir[320];
+    mkdir(upload_dir, 0700);
+    snprintf(full_upload_dir, sizeof(full_upload_dir), "%s%s", upload_dir, target_dir);
+
+    create_directory(full_upload_dir);
+
+    size_t filepath_size = strlen(full_upload_dir) + strlen(filename) + 1;
+    char *filepath = malloc(filepath_size);
+    if (filepath == NULL)
+    {
+        perror("Filepath memory allocation failed");
+        pthread_exit(NULL);
+    }
+    snprintf(filepath, filepath_size, "%s%s", full_upload_dir, filename);
+    printf("Target path: %s\n", filepath);
+
+    // Set up file pointer
+    FILE *fp = fopen((const char *)filepath, "wb");
+    if (fp == NULL)
+    {
+        perror("Failed to create file");
+        printf("Error opening: '%s'\n", filepath);
+        free(filepath);
         close(client_fd);
         pthread_exit(NULL);
     }
 
+    // Start reading incoming file
+    ssize_t total_bytes = transfer_file(client_fd, FILE_BUFFER, fp);
+    if (total_bytes == -1)
+    {
+        perror("Error writing file");
+        fclose(fp);
+    }
+    printf("total_bytes: %zd\n", total_bytes);
+
     fflush(fp);
     fclose(fp);
+    free(filepath);
+
+    // Acknowledge file was uploaded
+    char ack_file_upload[] = "File uploaded successfully\n";
+    acknowledge(client_fd, ack_file_upload);
+
     close(client_fd);
-    pthread_exit(NULL);
 }
 
 int main()
@@ -157,16 +257,6 @@ int main()
             perror("Thread creation failed");
             close(client_fd);
         }
-
-        // Return server response if successful
-        const char *response = "File uploaded successfully";
-        ssize_t sent_bytes = send(client_fd, response, strlen(response), 0);
-        if (sent_bytes < 0)
-            perror("Response write failed");
-        else
-            printf("Response sent to client: %s\n", response);
-
-        puts("File uploaded successfully!\n");
         pthread_detach(tid);
     }
 
