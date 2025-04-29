@@ -83,8 +83,6 @@ int main(int argc, char const *argv[])
 
     printf("Server acknowledged 1: %s\n", ack);
 
-    // if (target_dir != NULL)
-    // {
     send(sockfd, target_dir, strlen(target_dir), 0);
     char ack_target_dir[1024];
     int ack_target_dir_len = recv(sockfd, ack_target_dir, sizeof(ack_target_dir), 0);
@@ -95,7 +93,6 @@ int main(int argc, char const *argv[])
         exit(1);
     }
     printf("Server acknowledged 2: %s\n", ack_target_dir);
-    // }
 
     // Open file to upload
     fp = fopen(image_filename, "rb");
