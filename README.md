@@ -5,6 +5,4 @@ I will probably work on this project slowly to improve my C.
 
 Any suggestions are welcome so feel free to message me anywhere!  
 
-**Usage: ./client <file_path> <target_dir>**  
-
-Very barebones tested but works with image files.
+**Usage: ./client <file_path> <target_dir>**   
